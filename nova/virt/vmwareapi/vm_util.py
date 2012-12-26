@@ -18,6 +18,7 @@
 The VMware API VM utility module to build SOAP object specs.
 """
 
+from nova.virt.vmwareapi import vim_util
 
 def build_datastore_path(datastore_name, path):
     """Build the datastore compliant path."""
@@ -318,3 +319,31 @@ def get_add_vswitch_port_group_spec(client_factory, vswitch_name,
 
     vswitch_port_group_spec.policy = policy
     return vswitch_port_group_spec
+
+
+def get_vnc_config_spec(client_factory, port, password):
+    """Builds the vnc config spec."""
+    virtual_machine_config_spec = client_factory.create(
+                                    'ns0:VirtualMachineConfigSpec')
+
+    opt_enabled = client_factory.create('ns0:OptionValue')
+    opt_enabled.key = "RemoteDisplay.vnc.enabled"
+    opt_enabled.value = "true"
+    opt_port = client_factory.create('ns0:OptionValue')
+    opt_port.key = "RemoteDisplay.vnc.port"
+    opt_port.value = port
+    opt_pass = client_factory.create('ns0:OptionValue')
+    opt_pass.key = "RemoteDisplay.vnc.password"
+    opt_pass.value = password
+    virtual_machine_config_spec.extraConfig = [opt_enabled, opt_port, opt_pass]
+    return virtual_machine_config_spec
+
+
+def get_vm_ref_from_name(session, vm_name):
+    """Get reference to the VM with the name specified."""
+    vms = session._call_method(vim_util, "get_objects",
+                "VirtualMachine", ["name"])
+    for vm in vms:
+        if vm.propSet[0].val == vm_name:
+            return vm.obj
+    return None

@@ -30,7 +30,9 @@ A connection to the VMware ESX platform.
 :vmwareapi_api_retry_count:  The API retry count in case of failure such as
                              network failures (socket errors etc.)
                              (default: 10).
-
+:vnc_port:                  VNC starting port (default: 5900)
+:vnc_port_total:            Total number of VNC ports (default: 10000)
+:vnc_password:              VNC password
 """
 
 import time
@@ -45,8 +47,8 @@ from nova.virt import driver
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
+from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
-
 
 LOG = logging.getLogger(__name__)
 
@@ -76,6 +78,18 @@ vmwareapi_opts = [
                     'socket error, etc. '
                     'Used only if compute_driver is '
                     'vmwareapi.VMWareESXDriver.'),
+    cfg.StrOpt('vmwareapi_vlan_interface',
+               default='vmnic0',
+               help='Physical ethernet adapter name for vlan networking'),
+    cfg.IntOpt('vnc_port',
+               default=5900,
+               help='VNC starting port'),
+    cfg.IntOpt('vnc_port_total',
+                   default=10000,
+                   help='Total number of VNC ports'),
+    cfg.StrOpt('vnc_password',
+                   default=None,
+                   help='VNC password'),
     ]
 
 CONF = cfg.CONF
@@ -110,9 +124,9 @@ class VMwareESXDriver(driver.ComputeDriver):
                               "and vmwareapi_host_password to use"
                               "compute_driver=vmwareapi.VMWareESXDriver"))
 
-        session = VMwareAPISession(host_ip, host_username, host_password,
+        self._session = VMwareAPISession(host_ip, host_username, host_password,
                                    api_retry_count, scheme=scheme)
-        self._vmops = vmops.VMwareVMOps(session)
+        self._vmops = vmops.VMwareVMOps(self._session)
 
     def init_host(self, host):
         """Do the initialization that needs to be done."""
@@ -168,6 +182,10 @@ class VMwareESXDriver(driver.ComputeDriver):
     def get_console_output(self, instance):
         """Return snapshot of console."""
         return self._vmops.get_console_output(instance)
+
+    def get_vnc_console(self, instance):
+        """Return link to instance's VNC console"""
+        return self._vmops.get_vnc_console(instance)
 
     def get_volume_connector(self, _instance):
         """Return volume connector information"""
