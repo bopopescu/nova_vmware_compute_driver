@@ -27,9 +27,12 @@ import urllib
 import urllib2
 import uuid
 
+from nova.compute import api as compute
 from nova.compute import power_state
+from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import cfg
+from nova.openstack.common import excutils
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import network_util
@@ -46,15 +49,26 @@ LOG = logging.getLogger(__name__)
 VMWARE_POWER_STATES = {
                    'poweredOff': power_state.SHUTDOWN,
                     'poweredOn': power_state.RUNNING,
-                    'suspended': power_state.PAUSED}
+                    'suspended': power_state.SUSPENDED}
+VMWARE_PREFIX = 'vmware'
 
+
+RESIZE_TOTAL_STEPS = 4
 
 class VMwareVMOps(object):
     """Management class for VM-related tasks."""
 
-    def __init__(self, session):
+    def __init__(self, session, virtapi, volumeops):
         """Initializer."""
+        self.compute_api = compute.API()
         self._session = session
+        self._virtapi = virtapi
+        self._volumeops = volumeops
+        self._instance_path_base = VMWARE_PREFIX + CONF.base_dir_name
+        self._default_root_device = 'vda'
+        self._rescue_suffix = '-rescue'
+        self._poll_rescue_last_ran = None
+        self._vif_driver = importutils.import_object(CONF.vmware_vif_driver)
 
     def list_instances(self):
         """Lists the VM instances that are registered with the ESX host."""
@@ -666,6 +680,214 @@ class VMwareVMOps(object):
             reason = _("instance is not in a suspended state")
             raise exception.InstanceResumeFailure(reason=reason)
 
+    def rescue(self, context, instance, network_info, image_meta):
+        """Rescue the specified instance.
+
+            - shutdown the instance VM.
+            - spawn a rescue VM (the vm name-label will be instance-N-rescue).
+
+        """
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, instance['name'])
+        if vm_ref is None:
+            raise exception.InstanceNotFound(instance_id=instance['uuid'])
+
+        self.power_off(instance)
+        instance['name'] = instance['name'] + self._rescue_suffix
+        self.spawn(context, instance, image_meta, network_info)
+
+        # Attach vmdk to the rescue VM
+        hardware_devices = self._session._call_method(vim_util,
+                        "get_dynamic_property", vm_ref,
+                        "VirtualMachine", "config.hardware.device")
+        vmdk_path, controller_key, adapter_type, disk_type, unit_number \
+            = vm_util.get_vmdk_path_and_adapter_type(hardware_devices)
+        # Figure out the correct unit number
+        unit_number = unit_number + 1
+        rescue_vm_ref = vm_util.get_vm_ref_from_name(self._session,
+                                                     instance['name'])
+        self._volumeops.attach_disk_to_vm(
+                                rescue_vm_ref, instance,
+                                adapter_type, disk_type, vmdk_path,
+                                controller_key=controller_key,
+                                unit_number=unit_number)
+
+    def unrescue(self, instance):
+        """Unrescue the specified instance."""
+        instance_orig_name = instance['name']
+        instance['name'] = instance['name'] + self._rescue_suffix
+        self._delete(instance, None)
+        instance['name'] = instance_orig_name
+        self.power_on(instance)
+
+    def _get_orig_vm_name_label(self, instance):
+        return instance['name'] + '-orig'
+
+    def _update_instance_progress(self, context, instance, step, total_steps):
+        """Update instance progress percent to reflect current step number
+        """
+        # Divide the action's workflow into discrete steps and "bump" the
+        # instance's progress field as each step is completed.
+        #
+        # For a first cut this should be fine, however, for large VM images,
+        # the clone disk step begins to dominate the equation. A
+        # better approximation would use the percentage of the VM image that
+        # has been streamed to the destination host.
+        progress = round(float(step) / total_steps * 100)
+        instance_uuid = instance['uuid']
+        LOG.debug(_("Updating instance '%(instance_uuid)s' progress to"
+                    " %(progress)d") % locals(), instance=instance)
+        self._virtapi.instance_update(context, instance_uuid,
+                                      {'progress': progress})
+
+    def migrate_disk_and_power_off(self, context, instance, dest,
+                                   instance_type):
+        """
+        Transfers the disk of a running instance in multiple phases, turning
+        off the instance before the end.
+        """
+        # 0. Zero out the progress to begin
+        self._update_instance_progress(context, instance,
+                                       step=0,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, instance['name'])
+        if vm_ref is None:
+            raise exception.InstanceNotFound(instance_id=instance['name'])
+        host_ref = self._get_host_ref_from_name(dest)
+        if host_ref is None:
+            raise exception.HostNotFound(host=dest)
+
+        # 1. Power off the instance
+        self.power_off(instance)
+        self._update_instance_progress(context, instance,
+                                       step=1,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+
+        # 2. Rename the original VM with suffix '-orig'
+        name_label = self._get_orig_vm_name_label(instance)
+        LOG.debug(_("Renaming the VM to %s") % name_label,
+                  instance=instance)
+        rename_task = self._session._call_method(
+                            self._session._get_vim(),
+                            "Rename_Task", vm_ref, newName=name_label)
+        self._session._wait_for_task(instance['uuid'], rename_task)
+        LOG.debug(_("Renamed the VM to %s") % name_label,
+                  instance=instance)
+        self._update_instance_progress(context, instance,
+                                       step=2,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+
+        # Get the clone vm spec
+        ds_ref = vm_util.get_datastore_ref_and_name(self._session)[0]
+        client_factory = self._session._get_vim().client.factory
+        rel_spec = vm_util.relocate_vm_spec(client_factory, ds_ref, host_ref)
+        clone_spec = vm_util.clone_vm_spec(client_factory, rel_spec)
+        vm_folder_ref, res_pool_ref = self._get_vmfolder_and_res_pool_refs()
+
+        # 3. Clone VM on ESX host
+        LOG.debug(_("Cloning VM to host %s") % dest, instance=instance)
+        vm_clone_task = self._session._call_method(
+                                self._session._get_vim(),
+                                "CloneVM_Task", vm_ref,
+                                folder=vm_folder_ref,
+                                name=instance['name'],
+                                spec=clone_spec)
+        self._session._wait_for_task(instance['uuid'], vm_clone_task)
+        LOG.debug(_("Cloned VM to host %s") % dest, instance=instance)
+        self._update_instance_progress(context, instance,
+                                       step=3,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+
+    def confirm_migration(self, migration, instance, network_info):
+        """Confirms a resize, destroying the source VM"""
+        instance_name = self._get_orig_vm_name_label(instance)
+        # Destroy the original VM.
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, instance_name)
+        if vm_ref is None:
+            LOG.debug(_("instance not present"), instance=instance)
+            return
+
+        try:
+            LOG.debug(_("Destroying the VM"), instance=instance)
+            destroy_task = self._session._call_method(
+                                        self._session._get_vim(),
+                                        "Destroy_Task", vm_ref)
+            self._session._wait_for_task(instance['uuid'], destroy_task)
+            LOG.debug(_("Destroyed the VM"), instance=instance)
+        except Exception, excep:
+            LOG.warn(_("In vmwareapi:vmops:confirm_migration, got this "
+                     "exception while destroying the VM: %s") % str(excep))
+
+        if network_info:
+            self.unplug_vifs(instance, network_info)
+
+    def finish_revert_migration(self, instance):
+        """Finish reverting a resize, powering back on the instance"""
+        # The original vm was suffixed with '-orig'; find it using
+        # the old suffix, remove the suffix, then power it back on.
+        name_label = self._get_orig_vm_name_label(instance)
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, name_label)
+        if vm_ref is None:
+            raise exception.InstanceNotFound(instance_id=name_label)
+
+        LOG.debug(_("Renaming the VM from %s") % name_label,
+                  instance=instance)
+        rename_task = self._session._call_method(
+                            self._session._get_vim(),
+                            "Rename_Task", vm_ref, newName=instance['name'])
+        self._session._wait_for_task(instance['uuid'], rename_task)
+        LOG.debug(_("Renamed the VM from %s") % name_label,
+                  instance=instance)
+        self.power_on(instance)
+
+    def finish_migration(self, context, migration, instance, disk_info,
+                         network_info, image_meta, resize_instance=False):
+        """Completes a resize, turning on the migrated instance"""
+        # 4. Start VM
+        self.power_on(instance)
+        self._update_instance_progress(context, instance,
+                                       step=4,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+
+    def live_migration(self, context, instance_ref, dest,
+                       post_method, recover_method, block_migration=False):
+        """Spawning live_migration operation for distributing high-load."""
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, instance_ref.name)
+        if vm_ref is None:
+            raise exception.InstanceNotFound(instance_id=instance_ref.name)
+        host_ref = self._get_host_ref_from_name(dest)
+        if host_ref is None:
+            raise exception.HostNotFound(host=dest)
+
+        LOG.debug(_("Migrating VM to host %s") % dest, instance=instance_ref)
+        try:
+            vm_migrate_task = self._session._call_method(
+                                    self._session._get_vim(),
+                                    "MigrateVM_Task", vm_ref,
+                                    host=host_ref,
+                                    priority="defaultPriority")
+            self._session._wait_for_task(instance_ref['uuid'], vm_migrate_task)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                recover_method(context, instance_ref, dest, block_migration)
+        post_method(context, instance_ref, dest, block_migration)
+        LOG.debug(_("Migrated VM to host %s") % dest, instance=instance_ref)
+
+    def poll_rebooting_instances(self, timeout, instances):
+        """Poll for rebooting instances"""
+        ctxt = nova_context.get_admin_context()
+
+        instances_info = dict(instance_count=len(instances),
+                timeout=timeout)
+
+        if instances_info["instance_count"] > 0:
+            LOG.info(_("Found %(instance_count)d hung reboots "
+                    "older than %(timeout)d seconds") % instances_info)
+
+        for instance in instances:
+            LOG.info(_("Automatically hard rebooting %d") % instance['uuid'])
+            self.compute_api.reboot(ctxt, instance, "HARD")
+
     def get_info(self, instance):
         """Return data about the VM instance."""
         vm_ref = self._get_vm_ref_from_the_name(instance['name'])
@@ -775,6 +997,28 @@ class VMwareVMOps(object):
         dc_obj = self._session._call_method(vim_util, "get_objects",
                 "Datacenter", ["name"])
         return dc_obj[0].obj, dc_obj[0].propSet[0].val
+
+    def _get_host_ref_from_name(self, host_name):
+        """Get reference to the host with the name specified."""
+        host_objs = self._session._call_method(vim_util, "get_objects",
+                    "HostSystem", ["name"])
+        for host in host_objs:
+            if host.propSet[0].val == host_name:
+                return host.obj
+        return None
+
+    def _get_vmfolder_and_res_pool_refs(self):
+        """Get the Vm folder ref from the datacenter."""
+        dc_objs = self._session._call_method(vim_util, "get_objects",
+                                "Datacenter", ["vmFolder"])
+        # There is only one default datacenter in a standalone ESX host
+        vm_folder_ref = dc_objs[0].propSet[0].val
+
+        # Get the resource pool. Taking the first resource pool coming our
+        # way. Assuming that is the default resource pool.
+        res_pool_ref = self._session._call_method(vim_util, "get_objects",
+                                "ResourcePool")[0].obj
+        return vm_folder_ref, res_pool_ref
 
     def _path_exists(self, ds_browser, ds_path):
         """Check if the path exists on the datastore."""

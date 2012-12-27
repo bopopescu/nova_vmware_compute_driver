@@ -157,6 +157,61 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Resume the suspended VM instance."""
         self._vmops.resume(instance)
 
+    def rescue(self, context, instance, network_info, image_meta,
+               rescue_password):
+        """Rescue the specified instance"""
+        self._vmops.rescue(context, instance, network_info, image_meta)
+
+    def unrescue(self, instance, network_info):
+        """Unrescue the specified instance"""
+        self._vmops.unrescue(instance)
+
+    def power_off(self, instance):
+        """Power off the specified instance."""
+        self._vmops.power_off(instance)
+
+    def power_on(self, instance):
+        """Power on the specified instance"""
+        self._vmops.power_on(instance)
+
+    def migrate_disk_and_power_off(self, context, instance, dest,
+                                   instance_type, network_info,
+                                   block_device_info=None):
+        """
+        Transfers the disk of a running instance in multiple phases, turning
+        off the instance before the end.
+        """
+        return self._vmops.migrate_disk_and_power_off(context, instance,
+                                                      dest, instance_type)
+
+    def confirm_migration(self, migration, instance, network_info):
+        """Confirms a resize, destroying the source VM"""
+        self._vmops.confirm_migration(migration, instance, network_info)
+
+    def finish_revert_migration(self, instance, network_info,
+                                block_device_info=None):
+        """Finish reverting a resize, powering back on the instance"""
+        self._vmops.finish_revert_migration(instance)
+
+    def finish_migration(self, context, migration, instance, disk_info,
+                         network_info, image_meta, resize_instance=False,
+                         block_device_info=None):
+        """Completes a resize, turning on the migrated instance"""
+        self._vmops.finish_migration(context, migration, instance, disk_info,
+                                     network_info, image_meta, resize_instance)
+
+    def live_migration(self, context, instance_ref, dest,
+                       post_method, recover_method, block_migration=False,
+                       migrate_data=None):
+        """Live migration of an instance to another host"""
+        self._vmops.live_migration(context, instance_ref, dest,
+                                   post_method, recover_method,
+                                   block_migration)
+
+    def poll_rebooting_instances(self, timeout, instances):
+        """Poll for rebooting instances"""
+        self._vmops.poll_rebooting_instances(timeout, instances)
+
     def get_info(self, instance):
         """Return info about the VM instance."""
         return self._vmops.get_info(instance)
