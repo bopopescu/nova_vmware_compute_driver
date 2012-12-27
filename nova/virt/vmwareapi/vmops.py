@@ -39,7 +39,17 @@ from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmware_images
 
 
+vmware_vif_opts = [
+    cfg.StrOpt('vmware_vif_driver',
+               default='nova.virt.vmwareapi.vif.VMwareVlanBridgeDriver',
+               help='The VMware VIF driver to configure the VIFs.'),
+    cfg.StrOpt('vmware_ovs_integration_bridge',
+               default='br-int',
+               help='Name of Integration Bridge used by Open vSwitch'),
+    ]
+
 CONF = cfg.CONF
+CONF.register_opts(vmware_vif_opts)
 
 LOG = logging.getLogger(__name__)
 
@@ -728,9 +738,9 @@ class VMwareVMOps(object):
         Set the machine id of the VM for guest tools to pick up and reconfigure
         the network interfaces.
         """
-        vm_ref = self._get_vm_ref_from_the_name(instance.name)
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, instance['name'])
         if vm_ref is None:
-            raise exception.InstanceNotFound(instance_id=instance.id)
+            raise exception.InstanceNotFound(instance_id=instance['uuid'])
 
         machine_id_str = ''
         for (network, info) in network_info:
@@ -758,16 +768,14 @@ class VMwareVMOps(object):
                                  client_factory, machine_id_str)
 
         LOG.debug(_("Reconfiguring VM instance to set the machine id "
-                  "with ip - %(ip_addr)s") %
-                  {'ip_addr': ip_v4['ip']},
+                  "with ip - %(ip_addr)s") % {'ip_addr': ip_v4['ip']},
                   instance=instance)
         reconfig_task = self._session._call_method(self._session._get_vim(),
                            "ReconfigVM_Task", vm_ref,
                            spec=machine_id_change_spec)
         self._session._wait_for_task(instance['uuid'], reconfig_task)
         LOG.debug(_("Reconfigured VM instance to set the machine id "
-                  "with ip - %(ip_addr)s") %
-                  {'ip_addr': ip_v4['ip']},
+                  "with ip - %(ip_addr)s") % {'ip_addr': ip_v4['ip']},
                   instance=instance)
 
     def _get_datacenter_name_and_ref(self):
@@ -817,10 +825,43 @@ class VMwareVMOps(object):
                 return vm.obj
         return None
 
+    def inject_network_info(self, instance, network_info):
+        """inject network info for specified instance"""
+        # Set the machine.id parameter of the instance to inject
+        # the NIC configuration inside the VM
+        client_factory = self._session._get_vim().client.factory
+        self._set_machine_id(client_factory, instance, network_info)
+
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
         pass
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
-        pass
+        for (network, mapping) in network_info:
+            self._vif_driver.unplug(instance, (network, mapping))
+
+    def list_interfaces(self, instance_name):
+        """
+        Return the IDs of all the virtual network interfaces attached to the
+        specified instance, as a list.  These IDs are opaque to the caller
+        (they are only useful for giving back to this layer as a parameter to
+        interface_stats).  These IDs only need to be unique for a given
+        instance.
+        """
+        vm_ref = vm_util.get_vm_ref_from_name(self._session, instance_name)
+        if vm_ref is None:
+            raise exception.InstanceNotFound(instance_id=instance_name)
+
+        interfaces = []
+        # Get the virtual network interfaces attached to the VM
+        hardware_devices = self._session._call_method(vim_util,
+                    "get_dynamic_property", vm_ref,
+                    "VirtualMachine", "config.hardware.device")
+
+        for device in hardware_devices:
+            if device.__class__.__name__ in ["VirtualE1000", "VirtualE1000e",
+                "VirtualPCNet32", "VirtualVmxnet"]:
+                interfaces.append(device.key)
+
+        return interfaces
