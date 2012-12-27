@@ -318,6 +318,10 @@ class InstanceResumeFailure(Invalid):
     message = _("Failed to resume server") + ": %(reason)s."
 
 
+class InstancePowerOffFailure(Invalid):
+    message = _("Failed to power off instance") + ": %(reason)s."
+
+
 class InstanceRebootFailure(Invalid):
     message = _("Failed to reboot instance") + ": %(reason)s"
 

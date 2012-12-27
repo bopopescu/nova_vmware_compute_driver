@@ -18,6 +18,8 @@
 The VMware API VM utility module to build SOAP object specs.
 """
 
+from nova import exception
+from nova.virt.vmwareapi import vim_util
 
 def build_datastore_path(datastore_name, path):
     """Build the datastore compliant path."""
@@ -166,6 +168,46 @@ def get_vmdk_attach_config_spec(client_factory, disksize, file_path,
 
     config_spec.deviceChange = device_config_spec
     return config_spec
+
+
+def get_vmdk_path_and_adapter_type(hardware_devices):
+    """Gets the vmdk file path and the storage adapter type."""
+    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        hardware_devices = hardware_devices.VirtualDevice
+    vmdk_file_path = None
+    vmdk_controler_key = None
+    disk_type = None
+    unit_number = 0
+
+    adapter_type_dict = {}
+    for device in hardware_devices:
+        if device.__class__.__name__ == "VirtualDisk":
+            if device.backing.__class__.__name__ == \
+                    "VirtualDiskFlatVer2BackingInfo":
+                vmdk_file_path = device.backing.fileName
+                vmdk_controler_key = device.controllerKey
+                if getattr(device.backing, 'thinProvisioned', False):
+                    disk_type = "thin"
+                else:
+                    if getattr(device.backing, 'eagerlyScrub', False):
+                        disk_type = "eagerZeroedThick"
+                    else:
+                        disk_type = "preallocated"
+            if device.unitNumber > unit_number:
+                unit_number = device.unitNumber
+        elif device.__class__.__name__ == "VirtualLsiLogicController":
+            adapter_type_dict[device.key] = "lsiLogic"
+        elif device.__class__.__name__ == "VirtualBusLogicController":
+            adapter_type_dict[device.key] = "busLogic"
+        elif device.__class__.__name__ == "VirtualIDEController":
+            adapter_type_dict[device.key] = "ide"
+        elif device.__class__.__name__ == "VirtualLsiLogicSASController":
+            adapter_type_dict[device.key] = "lsiLogic"
+
+    adapter_type = adapter_type_dict.get(vmdk_controler_key, "")
+
+    return (vmdk_file_path, vmdk_controler_key, adapter_type,
+            disk_type, unit_number)
 
 
 def get_vmdk_file_path_and_adapter_type(client_factory, hardware_devices):
@@ -318,3 +360,48 @@ def get_add_vswitch_port_group_spec(client_factory, vswitch_name,
 
     vswitch_port_group_spec.policy = policy
     return vswitch_port_group_spec
+
+
+def search_datastore_spec(client_factory, file_name):
+    """Builds the datastore search spec."""
+    search_spec = client_factory.create('ns0:HostDatastoreBrowserSearchSpec')
+    search_spec.matchPattern = [file_name]
+    return search_spec
+
+
+def get_vm_ref_from_name(session, vm_name):
+    """Get reference to the VM with the name specified."""
+    vms = session._call_method(vim_util, "get_objects",
+                "VirtualMachine", ["name"])
+    for vm in vms:
+        if vm.propSet[0].val == vm_name:
+            return vm.obj
+    return None
+
+
+def get_datastore_ref_and_name(session):
+    """Get the datastore list and choose the first local storage."""
+    data_stores = session._call_method(vim_util, "get_objects",
+                "Datastore", ["summary.type", "summary.name",
+                              "summary.capacity", "summary.freeSpace"])
+    for elem in data_stores:
+        ds_name = None
+        ds_type = None
+        ds_cap = None
+        ds_free = None
+        for prop in elem.propSet:
+            if prop.name == "summary.type":
+                ds_type = prop.val
+            elif prop.name == "summary.name":
+                ds_name = prop.val
+            elif prop.name == "summary.capacity":
+                ds_cap = prop.val
+            elif prop.name == "summary.freeSpace":
+                ds_free = prop.val
+        # Local storage identifier
+        if ds_type == "VMFS" or ds_type == "NFS":
+            data_store_name = ds_name
+            return elem.obj, data_store_name, ds_cap, ds_free
+
+    if data_store_name is None:
+        raise exception.DatastoreNotFound()

@@ -230,15 +230,18 @@ class GlanceImageService(object):
 
         return getattr(image_meta, 'direct_url', None)
 
-    def download(self, context, image_id, data):
-        """Calls out to Glance for metadata and data and writes data."""
+    def download(self, context, image_id, data=None):
+        """Calls out to Glance for data and writes data."""
         try:
             image_chunks = self._client.call(context, 1, 'data', image_id)
         except Exception:
             _reraise_translated_image_exception(image_id)
 
-        for chunk in image_chunks:
-            data.write(chunk)
+        if data is None:
+            return image_chunks
+        else:
+            for chunk in image_chunks:
+                data.write(chunk)
 
     def create(self, context, image_meta, data=None):
         """Store the image data and return the new image object."""
@@ -275,15 +278,12 @@ class GlanceImageService(object):
 
         :raises: ImageNotFound if the image does not exist.
         :raises: NotAuthorized if the user is not an owner.
-        :raises: ImageNotAuthorized if the user is not authorized.
 
         """
         try:
             self._client.call(context, 1, 'delete', image_id)
         except glanceclient.exc.NotFound:
             raise exception.ImageNotFound(image_id=image_id)
-        except glanceclient.exc.HTTPForbidden:
-            raise exception.ImageNotAuthorized(image_id=image_id)
         return True
 
     @staticmethod

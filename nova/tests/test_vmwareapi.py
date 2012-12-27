@@ -40,7 +40,9 @@ class VMwareAPIVMTestCase(test.TestCase):
         self.context = context.RequestContext('fake', 'fake', is_admin=False)
         self.flags(vmwareapi_host_ip='test_url',
                    vmwareapi_host_username='test_username',
-                   vmwareapi_host_password='test_pass')
+                   vmwareapi_host_password='test_pass',
+                   vnc_enabled=False,
+                   use_linked_clone=False)
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
@@ -192,7 +194,7 @@ class VMwareAPIVMTestCase(test.TestCase):
         self._check_vm_info(info, power_state.RUNNING)
         self.conn.suspend(self.instance)
         info = self.conn.get_info({'name': 1})
-        self._check_vm_info(info, power_state.PAUSED)
+        self._check_vm_info(info, power_state.SUSPENDED)
         self.assertRaises(exception.InstanceRebootFailure, self.conn.reboot,
                           self.instance, self.network_info, 'SOFT')
 
@@ -202,7 +204,7 @@ class VMwareAPIVMTestCase(test.TestCase):
         self._check_vm_info(info, power_state.RUNNING)
         self.conn.suspend(self.instance)
         info = self.conn.get_info({'name': 1})
-        self._check_vm_info(info, power_state.PAUSED)
+        self._check_vm_info(info, power_state.SUSPENDED)
 
     def test_suspend_non_existent(self):
         self._create_instance_in_the_db()
@@ -215,7 +217,7 @@ class VMwareAPIVMTestCase(test.TestCase):
         self._check_vm_info(info, power_state.RUNNING)
         self.conn.suspend(self.instance)
         info = self.conn.get_info({'name': 1})
-        self._check_vm_info(info, power_state.PAUSED)
+        self._check_vm_info(info, power_state.SUSPENDED)
         self.conn.resume(self.instance, self.network_info)
         info = self.conn.get_info({'name': 1})
         self._check_vm_info(info, power_state.RUNNING)
@@ -231,6 +233,43 @@ class VMwareAPIVMTestCase(test.TestCase):
         self._check_vm_info(info, power_state.RUNNING)
         self.assertRaises(exception.InstanceResumeFailure, self.conn.resume,
                           self.instance, self.network_info)
+
+    def test_power_on(self):
+        self._create_vm()
+        info = self.conn.get_info({'name': 1})
+        self._check_vm_info(info, power_state.RUNNING)
+        self.conn.power_off(self.instance)
+        info = self.conn.get_info({'name': 1})
+        self._check_vm_info(info, power_state.SHUTDOWN)
+        self.conn.power_on(self.instance)
+        info = self.conn.get_info({'name': 1})
+        self._check_vm_info(info, power_state.RUNNING)
+
+    def test_power_on_non_existent(self):
+        self._create_instance_in_the_db()
+        self.assertRaises(exception.InstanceNotFound, self.conn.power_on,
+                          self.instance)
+
+    def test_power_off(self):
+        self._create_vm()
+        info = self.conn.get_info({'name': 1})
+        self._check_vm_info(info, power_state.RUNNING)
+        self.conn.power_off(self.instance)
+        info = self.conn.get_info({'name': 1})
+        self._check_vm_info(info, power_state.SHUTDOWN)
+
+    def test_power_off_non_existent(self):
+        self._create_instance_in_the_db()
+        self.assertRaises(exception.InstanceNotFound, self.conn.power_off,
+                          self.instance)
+
+    def test_power_off_suspended(self):
+        self._create_vm()
+        self.conn.suspend(self.instance)
+        info = self.conn.get_info({'name': 1})
+        self._check_vm_info(info, power_state.SUSPENDED)
+        self.assertRaises(exception.InstancePowerOffFailure,
+                          self.conn.power_off, self.instance)
 
     def test_get_info(self):
         self._create_vm()

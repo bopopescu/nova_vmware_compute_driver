@@ -110,9 +110,9 @@ class VMwareESXDriver(driver.ComputeDriver):
                               "and vmwareapi_host_password to use"
                               "compute_driver=vmwareapi.VMWareESXDriver"))
 
-        session = VMwareAPISession(host_ip, host_username, host_password,
-                                   api_retry_count, scheme=scheme)
-        self._vmops = vmops.VMwareVMOps(session)
+        self._session = VMwareAPISession(host_ip, host_username, host_password,
+                                         api_retry_count, scheme=scheme)
+        self._vmops = vmops.VMwareVMOps(self._session)
 
     def init_host(self, host):
         """Do the initialization that needs to be done."""
@@ -126,11 +126,12 @@ class VMwareESXDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         """Create VM instance."""
-        self._vmops.spawn(context, instance, image_meta, network_info)
+        self._vmops.spawn(context, instance, image_meta, network_info,
+                          block_device_info)
 
-    def snapshot(self, context, instance, name):
+    def snapshot(self, context, instance, image_id):
         """Create snapshot from a running VM instance."""
-        self._vmops.snapshot(context, instance, name)
+        self._vmops.snapshot(context, instance, image_id)
 
     def reboot(self, instance, network_info, reboot_type,
                block_device_info=None):
