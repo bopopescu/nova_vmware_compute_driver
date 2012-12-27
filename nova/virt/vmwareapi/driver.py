@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack LLC.
 #
@@ -93,11 +94,11 @@ class Failure(Exception):
         return str(self.details)
 
 
-class VMWareESXDriver(driver.ComputeDriver):
+class VMwareESXDriver(driver.ComputeDriver):
     """The ESX host connection object."""
 
     def __init__(self, virtapi, read_only=False, scheme="https"):
-        super(VMWareESXDriver, self).__init__(virtapi)
+        super(VMwareESXDriver, self).__init__(virtapi)
 
         host_ip = CONF.vmwareapi_host_ip
         host_username = CONF.vmwareapi_host_username
@@ -109,9 +110,9 @@ class VMWareESXDriver(driver.ComputeDriver):
                               "and vmwareapi_host_password to use"
                               "compute_driver=vmwareapi.VMWareESXDriver"))
 
-        session = VMWareAPISession(host_ip, host_username, host_password,
+        session = VMwareAPISession(host_ip, host_username, host_password,
                                    api_retry_count, scheme=scheme)
-        self._vmops = vmops.VMWareVMOps(session)
+        self._vmops = vmops.VMwareVMOps(session)
 
     def init_host(self, host):
         """Do the initialization that needs to be done."""
@@ -205,7 +206,7 @@ class VMWareESXDriver(driver.ComputeDriver):
         self._vmops.unplug_vifs(instance, network_info)
 
 
-class VMWareAPISession(object):
+class VMwareAPISession(object):
     """
     Sets up a session with the ESX host and handles all
     the calls made to the host.

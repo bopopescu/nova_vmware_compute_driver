@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack LLC.
 #
@@ -16,7 +17,7 @@
 #    under the License.
 
 """
-Test suite for VMWareAPI.
+Test suite for VMwareAPI.
 """
 
 from nova.compute import power_state
@@ -31,11 +32,11 @@ from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import fake as vmwareapi_fake
 
 
-class VMWareAPIVMTestCase(test.TestCase):
+class VMwareAPIVMTestCase(test.TestCase):
     """Unit tests for Vmware API connection calls."""
 
     def setUp(self):
-        super(VMWareAPIVMTestCase, self).setUp()
+        super(VMwareAPIVMTestCase, self).setUp()
         self.context = context.RequestContext('fake', 'fake', is_admin=False)
         self.flags(vmwareapi_host_ip='test_url',
                    vmwareapi_host_username='test_username',
@@ -46,7 +47,7 @@ class VMWareAPIVMTestCase(test.TestCase):
         vmwareapi_fake.reset()
         db_fakes.stub_out_db_instance_api(self.stubs)
         stubs.set_stubs(self.stubs)
-        self.conn = driver.VMWareESXDriver(None, False)
+        self.conn = driver.VMwareESXDriver(None, False)
         # NOTE(vish): none of the network plugging code is actually
         #             being tested
         self.network_info = [({'bridge': 'fa0',
@@ -76,7 +77,7 @@ class VMWareAPIVMTestCase(test.TestCase):
         nova.tests.image.fake.stub_out_image_service(self.stubs)
 
     def tearDown(self):
-        super(VMWareAPIVMTestCase, self).tearDown()
+        super(VMwareAPIVMTestCase, self).tearDown()
         vmwareapi_fake.cleanup()
         nova.tests.image.fake.FakeImageService_reset()
 

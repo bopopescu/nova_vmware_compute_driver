@@ -96,7 +96,7 @@ def fetch_image(context, image, instance, **kwargs):
     f = StringIO.StringIO()
     image_service.download(context, image_id, f)
     read_file_handle = read_write_util.GlanceFileRead(f)
-    write_file_handle = read_write_util.VMWareHTTPWriteFile(
+    write_file_handle = read_write_util.VMwareHTTPWriteFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),
                                 kwargs.get("datastore_name"),
@@ -113,7 +113,7 @@ def upload_image(context, image, instance, **kwargs):
     """Upload the snapshotted vm disk file to Glance image server."""
     LOG.debug(_("Uploading image %s to the Glance image server") % image,
               instance=instance)
-    read_file_handle = read_write_util.VmWareHTTPReadFile(
+    read_file_handle = read_write_util.VMwareHTTPReadFile(
                                 kwargs.get("host"),
                                 kwargs.get("data_center_name"),
                                 kwargs.get("datastore_name"),
