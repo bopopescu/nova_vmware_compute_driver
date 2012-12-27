@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
 # Copyright 2011 OpenStack LLC.
 #
@@ -15,7 +16,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""VIF drivers for VMWare."""
+"""VIF drivers for VMware."""
 
 from nova import exception
 from nova.openstack.common import cfg
@@ -23,9 +24,14 @@ from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import network_util
 
 
-LOG = logging.getLogger(__name__)
+vmwareapi_vlan_bridge_opt = cfg.StrOpt('vmwareapi_vlan_interface',
+               default='vmnic0',
+               help='Physical ethernet adapter name for vlan networking')
 
 CONF = cfg.CONF
+CONF.register_opt(vmwareapi_vlan_bridge_opt)
+
+LOG = logging.getLogger(__name__)
 
 vmwareapi_vif_opts = [
     cfg.StrOpt('vmwareapi_vlan_interface',
