@@ -46,6 +46,7 @@ from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vmops
+from nova.virt.vmwareapi import volumeops
 
 
 LOG = logging.getLogger(__name__)
@@ -76,6 +77,15 @@ vmwareapi_opts = [
                     'socket error, etc. '
                     'Used only if compute_driver is '
                     'vmwareapi.VMWareESXDriver.'),
+    cfg.StrOpt('vmwareapi_vlan_interface',
+               default='vmnic0',
+               help='Physical ethernet adapter name for vlan networking'),
+    cfg.BoolOpt('use_linked_clone',
+                default=True,
+                help='Whether to use linked clone'),
+     cfg.StrOpt('base_dir_name',
+                default='_base',
+                help='Directory for base image'),
     ]
 
 CONF = cfg.CONF
@@ -110,9 +120,10 @@ class VMwareESXDriver(driver.ComputeDriver):
                               "and vmwareapi_host_password to use"
                               "compute_driver=vmwareapi.VMWareESXDriver"))
 
-        session = VMwareAPISession(host_ip, host_username, host_password,
+        self._session = VMwareAPISession(host_ip, host_username, host_password,
                                    api_retry_count, scheme=scheme)
-        self._vmops = vmops.VMwareVMOps(session)
+        self._volumeops = volumeops.VMwareVolumeOps(self._session)
+        self._vmops = vmops.VMwareVMOps(self._session)
 
     def init_host(self, host):
         """Do the initialization that needs to be done."""
@@ -169,23 +180,21 @@ class VMwareESXDriver(driver.ComputeDriver):
         """Return snapshot of console."""
         return self._vmops.get_console_output(instance)
 
-    def get_volume_connector(self, _instance):
+    def get_volume_connector(self, instance):
         """Return volume connector information"""
-        # TODO(vish): When volume attaching is supported, return the
-        #             proper initiator iqn and host.
-        return {
-            'ip': CONF.vmwareapi_host_ip,
-            'initiator': None,
-            'host': None
-        }
+        return self._volumeops.get_volume_connector(instance)
 
     def attach_volume(self, connection_info, instance_name, mountpoint):
         """Attach volume storage to VM instance."""
-        pass
+        return self._volumeops.attach_volume(connection_info,
+                                             instance_name,
+                                             mountpoint)
 
     def detach_volume(self, connection_info, instance_name, mountpoint):
         """Detach volume storage to VM instance."""
-        pass
+        return self._volumeops.detach_volume(connection_info,
+                                             instance_name,
+                                             mountpoint)
 
     def get_console_pool_info(self, console_type):
         """Get info about the host on which the VM resides."""
